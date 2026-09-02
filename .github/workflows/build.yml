@@ -1,8 +1,12 @@
 name: Build APK
 
+permissions:
+  contents: write
+
 on:
   push:
     branches: [ main ]
+    tags: [ 'v*' ]
   workflow_dispatch:
 
 jobs:
@@ -27,11 +31,35 @@ jobs:
       - name: Show version being built (sanity check)
         run: grep -E "versionCode|versionName" app/build.gradle
 
-      - name: Build debug APK (auto-signed, installable as-is)
-        run: ./gradlew clean assembleDebug
+      - name: Decode keystore
+        run: |
+          if [ -n "${{ secrets.KEYSTORE_BASE64 }}" ]; then
+            echo "${{ secrets.KEYSTORE_BASE64 }}" | base64 -d > release.keystore
+            echo "KEYSTORE_FILE=$(pwd)/release.keystore" >> "$GITHUB_ENV"
+            echo "KEYSTORE_PASSWORD=${{ secrets.KEYSTORE_PASSWORD }}" >> "$GITHUB_ENV"
+            echo "KEY_ALIAS=${{ secrets.KEY_ALIAS }}" >> "$GITHUB_ENV"
+            echo "KEY_PASSWORD=${{ secrets.KEY_PASSWORD }}" >> "$GITHUB_ENV"
+          else
+            echo "KEYSTORE_BASE64 not set — building unsigned APK"
+          fi
+
+      - name: Build release APK
+        run: ./gradlew clean assembleRelease --no-daemon
+
+      - name: Remove keystore
+        if: always()
+        run: rm -f release.keystore
 
       - name: Upload APK artifact
         uses: actions/upload-artifact@v4
         with:
-          name: skimview-debug-apk
-          path: app/build/outputs/apk/debug/app-debug.apk
+          name: app-release
+          path: app/build/outputs/apk/release/*.apk
+
+      - name: Attach APK to GitHub Release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: app/build/outputs/apk/release/*.apk
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
